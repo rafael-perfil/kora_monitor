@@ -28,9 +28,10 @@ def api_get(url, params=None):
     r.raise_for_status()
     return r.json()
 
-def api_paginate(url, params=None):
+def api_paginate(url, params=None, limit=100):
+    # Note: the usage API caps `limit` at 31 for bucket_width=1d; costs allows up to 180.
     p = dict(params or {})
-    p["limit"] = 100
+    p["limit"] = limit
     results = []
     while True:
         d = api_get(url, p)
@@ -77,6 +78,7 @@ try:
     usage_buckets = api_paginate(
         f"{BASE_URL}/usage/completions",
         {**base, "group_by": "model"},
+        limit=31,   # max allowed for bucket_width=1d
     )
 except Exception as e:
     sys.exit(f"ERROR fetching usage: {e}")
