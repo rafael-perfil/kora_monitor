@@ -90,6 +90,15 @@ except Exception as e:
     print(f"  Warning (keys skipped): {e}")
     api_keys = []
 
+print("→ Fetching USD→BRL rate…")
+brl_rate = 5.0  # fallback
+try:
+    fx = requests.get("https://economia.awesomeapi.com.br/last/USD-BRL", timeout=15).json()
+    brl_rate = round(float(fx["USDBRL"]["bid"]), 4)
+    print(f"  USD→BRL = {brl_rate}")
+except Exception as e:
+    print(f"  Warning (using fallback rate {brl_rate}): {e}")
+
 # ── Aggregate costs ────────────────────────────────────────────────────────────
 daily_cost = defaultdict(float)
 total_cost = 0.0
@@ -190,6 +199,7 @@ key_rows = [
 # ── DATA object ────────────────────────────────────────────────────────────────
 DATA = {
     "updated_at":     now.strftime("%d/%m/%Y %H:%M UTC"),
+    "brl_rate":       brl_rate,
     "month_cost":     round(total_cost, 6),
     "total_input":    sum(s["i"] for s in model_agg.values()),
     "total_output":   sum(s["o"] for s in model_agg.values()),
@@ -220,26 +230,49 @@ HTML = """<!DOCTYPE html>
 <title>Kora Monitor</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
 <style>
+/* ── Light theme (default) ──────────────────────────────────────────────────── */
 :root{
-  --bg:     #07070f;
-  --card:   #0d0d1b;
-  --card2:  #12122a;
-  --border: #1c1c38;
-  --cyan:   #00d4ff;
-  --purple: #7c4dff;
-  --green:  #00e676;
-  --orange: #ff9100;
-  --red:    #ff4569;
-  --text:   #d4dcf0;
-  --muted:  #50607a;
-  --r:      12px;
+  --bg:       #f3f5fa;
+  --card:     #ffffff;
+  --card2:    #eef1f8;
+  --border:   #e1e6f0;
+  --cyan:     #0aa5c9;
+  --purple:   #7c4dff;
+  --green:    #00b35c;
+  --orange:   #f57c00;
+  --red:      #e53860;
+  --text:     #1b2438;
+  --muted:    #6a7691;
+  --overlay:  rgba(243,245,250,.97);
+  --input-bg: #f3f5fa;
+  --tick:     #6a7691;
+  --grid:     rgba(120,130,150,.18);
+  --r:        12px;
+}
+/* ── Dark theme ─────────────────────────────────────────────────────────────── */
+:root[data-theme="dark"]{
+  --bg:       #07070f;
+  --card:     #0d0d1b;
+  --card2:    #12122a;
+  --border:   #1c1c38;
+  --cyan:     #00d4ff;
+  --purple:   #7c4dff;
+  --green:    #00e676;
+  --orange:   #ff9100;
+  --red:      #ff4569;
+  --text:     #d4dcf0;
+  --muted:    #50607a;
+  --overlay:  rgba(7,7,15,.98);
+  --input-bg: #0a0a18;
+  --tick:     #50607a;
+  --grid:     rgba(28,28,56,.8);
 }
 *{margin:0;padding:0;box-sizing:border-box}
-body{background:var(--bg);color:var(--text);font-family:system-ui,'Segoe UI',sans-serif;min-height:100vh}
+body{background:var(--bg);color:var(--text);font-family:system-ui,'Segoe UI',sans-serif;min-height:100vh;transition:background .25s,color .25s}
 
 /* ── Login ──────────────────────────────────────────────────────────────────── */
 #login{
-  position:fixed;inset:0;background:rgba(7,7,15,.98);
+  position:fixed;inset:0;background:var(--overlay);
   display:flex;align-items:center;justify-content:center;z-index:999;
 }
 .lcard{
@@ -254,7 +287,7 @@ body{background:var(--bg);color:var(--text);font-family:system-ui,'Segoe UI',san
 .llogo p{font-size:11px;color:var(--muted);margin-top:3px;letter-spacing:.3px}
 .lfld label{display:block;font-size:10px;color:var(--muted);margin-bottom:7px;text-transform:uppercase;letter-spacing:.6px}
 .lfld input{
-  width:100%;padding:13px 16px;background:#0a0a18;
+  width:100%;padding:13px 16px;background:var(--input-bg);
   border:1px solid var(--border);border-radius:8px;
   color:var(--text);font-size:15px;outline:none;transition:border-color .2s;
 }
@@ -399,7 +432,9 @@ tbody td{padding:10px 12px;color:var(--text)}
       </div>
     </div>
     <div class="hdr-r">
+      <div class="badge">USD→BRL: <b id="fx-rate">—</b></div>
       <div class="badge">Atualizado: <b id="upd-time">—</b></div>
+      <button class="btn" id="theme-btn" onclick="toggleTheme()" title="Alternar tema">🌙</button>
       <button class="btn" onclick="location.reload()">↻&nbsp; Atualizar</button>
       <button class="btn btn-out" onclick="doLogout()">Sair</button>
     </div>
@@ -412,7 +447,7 @@ tbody td{padding:10px 12px;color:var(--text)}
       <div class="sico">💰</div>
       <div class="slbl">Custo Real (30d)</div>
       <div class="sval"><span class="cur">$ </span><span id="s-cost">—</span></div>
-      <div class="ssub">via fatura OpenAI</div>
+      <div class="ssub" id="s-cost-brl">—</div>
     </div>
     <div class="scard g">
       <div class="scard-glow"></div>
@@ -540,12 +575,43 @@ document.getElementById("pwd").addEventListener("keydown", e => {
 });
 
 // ── Formatting ────────────────────────────────────────────────────────────────
+const RATE = DATA.brl_rate || 5;
+
 function fmt(n, dec = 0) {
   if (n == null) return "—";
   if (n >= 1e9) return (n / 1e9).toFixed(1) + "B";
   if (n >= 1e6) return (n / 1e6).toFixed(1) + "M";
   if (n >= 1e3) return (n / 1e3).toFixed(1) + "K";
   return n.toLocaleString("pt-BR", { maximumFractionDigits: dec });
+}
+function usd(v, d = 4) { return "$" + Number(v).toFixed(d); }
+function brl(v, d = 2) {
+  return "R$ " + (Number(v) * RATE).toLocaleString("pt-BR",
+    { minimumFractionDigits: d, maximumFractionDigits: d });
+}
+
+// ── Theme ─────────────────────────────────────────────────────────────────────
+function cssVar(name) {
+  return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+}
+function curTheme() {
+  return document.documentElement.getAttribute("data-theme") === "dark" ? "dark" : "light";
+}
+function updateThemeBtn() {
+  const b = document.getElementById("theme-btn");
+  if (b) b.textContent = curTheme() === "dark" ? "☀️" : "🌙";
+}
+function initTheme() {
+  const t = localStorage.getItem("kora_theme") || "light";   // light por padrão
+  document.documentElement.setAttribute("data-theme", t);
+  updateThemeBtn();
+}
+function toggleTheme() {
+  const next = curTheme() === "dark" ? "light" : "dark";
+  document.documentElement.setAttribute("data-theme", next);
+  localStorage.setItem("kora_theme", next);
+  updateThemeBtn();
+  buildCharts();   // recria gráficos com cores do novo tema
 }
 
 // ── Render ────────────────────────────────────────────────────────────────────
@@ -555,43 +621,38 @@ function showDash() {
   render();
 }
 
-function render() {
-  // Stats
-  document.getElementById("upd-time").textContent  = DATA.updated_at;
-  document.getElementById("s-cost").textContent    = DATA.month_cost.toFixed(4);
-  document.getElementById("s-models").textContent  = DATA.active_models;
-  document.getElementById("s-reqs").textContent    = fmt(DATA.total_requests);
-  const tot = DATA.total_input + DATA.total_output;
-  document.getElementById("s-tokens").textContent  = fmt(tot);
-  document.getElementById("s-tok-detail").textContent =
-    `↑ ${fmt(DATA.total_input)} · ↓ ${fmt(DATA.total_output)} · ♻ ${fmt(DATA.total_cached)}`;
+let charts = {};
+function buildCharts() {
+  Object.values(charts).forEach(c => c && c.destroy());
+  charts = {};
 
-  // Chart defaults
-  Chart.defaults.color       = "#50607a";
-  Chart.defaults.borderColor = "#1c1c38";
+  const tick = cssVar("--tick") || "#6a7691";
+  const grd  = cssVar("--grid") || "rgba(120,130,150,.18)";
+  Chart.defaults.color       = tick;
+  Chart.defaults.borderColor = grd;
   const font = { family: "system-ui,'Segoe UI',sans-serif", size: 11 };
-  const grid = { color: "rgba(28,28,56,.8)" };
+  const grid = { color: grd };
 
   // ── Daily cost bar ────────────────────────────────────────────────────────────
-  new Chart(document.getElementById("c-cost"), {
+  charts.cost = new Chart(document.getElementById("c-cost"), {
     type: "bar",
     data: {
       labels: DATA.daily.labels,
       datasets: [{
         label: "USD",
         data: DATA.daily.cost,
-        backgroundColor: "rgba(0,212,255,.45)",
-        borderColor:     "rgba(0,212,255,.9)",
+        backgroundColor: "rgba(10,165,201,.55)",
+        borderColor:     "rgba(10,165,201,.95)",
         borderWidth: 1,
         borderRadius: 3,
-        hoverBackgroundColor: "rgba(0,212,255,.7)",
+        hoverBackgroundColor: "rgba(10,165,201,.8)",
       }],
     },
     options: {
       responsive: true, maintainAspectRatio: false,
       plugins: {
         legend: { display: false },
-        tooltip: { callbacks: { label: ctx => " $" + ctx.raw.toFixed(4) } },
+        tooltip: { callbacks: { label: ctx => ` ${usd(ctx.raw)}  ·  ${brl(ctx.raw)}` } },
       },
       scales: {
         x: { ticks: { font, maxRotation: 0, autoSkip: true, maxTicksLimit: 12 }, grid },
@@ -600,9 +661,9 @@ function render() {
     },
   });
 
-  // ── Doughnut ──────────────────────────────────────────────────────────────────
-  const palette = ["#00d4ff","#7c4dff","#00e676","#ff9100","#ff4569","#40c4ff","#e040fb","#69f0ae"];
-  new Chart(document.getElementById("c-doughnut"), {
+  // ── Doughnut (custo por modelo) ────────────────────────────────────────────────
+  const palette = ["#0aa5c9","#7c4dff","#00b35c","#f57c00","#e53860","#3b82f6","#d946ef","#14b8a6"];
+  charts.doughnut = new Chart(document.getElementById("c-doughnut"), {
     type: "doughnut",
     data: {
       labels: DATA.doughnut.labels,
@@ -621,20 +682,22 @@ function render() {
           position: "bottom",
           labels: { font, padding: 10, boxWidth: 10, usePointStyle: true, pointStyle: "circle" },
         },
-        tooltip: { callbacks: { label: ctx => " $" + ctx.raw.toFixed(4) } },
+        tooltip: { callbacks: {
+          label: ctx => ` ${ctx.label}: ${usd(ctx.raw)} · ${brl(ctx.raw)}`,
+        } },
       },
     },
   });
 
   // ── Token stacked bar ─────────────────────────────────────────────────────────
-  new Chart(document.getElementById("c-tokens"), {
+  charts.tokens = new Chart(document.getElementById("c-tokens"), {
     type: "bar",
     data: {
       labels: DATA.daily.labels,
       datasets: [
-        { label: "Entrada", data: DATA.daily.input,  backgroundColor: "rgba(0,212,255,.65)",  borderRadius: 2 },
-        { label: "Saída",   data: DATA.daily.output, backgroundColor: "rgba(124,77,255,.65)", borderRadius: 2 },
-        { label: "Cache",   data: DATA.daily.cached, backgroundColor: "rgba(0,230,118,.55)",  borderRadius: 2 },
+        { label: "Entrada", data: DATA.daily.input,  backgroundColor: "rgba(10,165,201,.7)",  borderRadius: 2 },
+        { label: "Saída",   data: DATA.daily.output, backgroundColor: "rgba(124,77,255,.7)",  borderRadius: 2 },
+        { label: "Cache",   data: DATA.daily.cached, backgroundColor: "rgba(0,179,92,.6)",    borderRadius: 2 },
       ],
     },
     options: {
@@ -649,8 +712,24 @@ function render() {
       },
     },
   });
+}
 
-  // ── Model table ───────────────────────────────────────────────────────────────
+function render() {
+  // Stats
+  document.getElementById("upd-time").textContent  = DATA.updated_at;
+  document.getElementById("fx-rate").textContent   = "R$ " + RATE.toFixed(2);
+  document.getElementById("s-cost").textContent    = DATA.month_cost.toFixed(4);
+  document.getElementById("s-cost-brl").textContent = brl(DATA.month_cost) + "  ·  fatura OpenAI";
+  document.getElementById("s-models").textContent  = DATA.active_models;
+  document.getElementById("s-reqs").textContent    = fmt(DATA.total_requests);
+  const tot = DATA.total_input + DATA.total_output;
+  document.getElementById("s-tokens").textContent  = fmt(tot);
+  document.getElementById("s-tok-detail").textContent =
+    `↑ ${fmt(DATA.total_input)} · ↓ ${fmt(DATA.total_output)} · ♻ ${fmt(DATA.total_cached)}`;
+
+  buildCharts();
+
+  // ── Model table (custo por modelo) ──────────────────────────────────────────────
   const mtb = document.getElementById("model-tbody");
   if (!DATA.model_rows.length) {
     mtb.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--muted);padding:24px">Sem dados de uso no período</td></tr>';
@@ -663,7 +742,8 @@ function render() {
         <td class="num">${fmt(m.input)}</td>
         <td class="num">${fmt(m.output)}</td>
         <td class="num">${fmt(m.cached)}</td>
-        <td style="color:var(--cyan)">$${m.cost_est.toFixed(4)}</td>
+        <td><span style="color:var(--cyan)">${usd(m.cost_est)}</span>
+            <span style="color:var(--muted);font-size:11px"> · ${brl(m.cost_est)}</span></td>
       `;
       mtb.appendChild(tr);
     });
@@ -697,6 +777,7 @@ function render() {
 }
 
 // ── Boot ──────────────────────────────────────────────────────────────────────
+initTheme();
 if (sessionOk()) showDash();
 </script>
 </body>
