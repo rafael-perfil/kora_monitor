@@ -61,6 +61,14 @@ def fmt_date(v):
     except Exception:
         return str(v)
 
+def to_float(x):
+    try:    return float(x)
+    except (TypeError, ValueError): return 0.0
+
+def to_int(x):
+    try:    return int(x)
+    except (TypeError, ValueError): return 0
+
 # ── Fetch ──────────────────────────────────────────────────────────────────────
 now  = datetime.now(timezone.utc)
 t0   = int((now - timedelta(days=DAYS)).timestamp())
@@ -90,6 +98,24 @@ except Exception as e:
     print(f"  Warning (keys skipped): {e}")
     api_keys = []
 
+print("→ Fetching per-project costs…")
+project_rows = []
+try:
+    projects = api_paginate(f"{BASE_URL}/projects", {})
+    pname = {p["id"]: p.get("name", p["id"]) for p in projects}
+    pcost_buckets = api_paginate(f"{BASE_URL}/costs", {**base, "group_by": "project_id"})
+    pcost = defaultdict(float)
+    for b in pcost_buckets:
+        for r in b.get("results", []):
+            pid = r.get("project_id") or "—"
+            pcost[pid] += to_float(r.get("amount", {}).get("value", 0.0))
+    project_rows = sorted(
+        [{"name": pname.get(pid, pid), "cost": round(v, 6)} for pid, v in pcost.items() if v > 0],
+        key=lambda x: x["cost"], reverse=True,
+    )[:15]
+except Exception as e:
+    print(f"  Warning (projects skipped): {e}")
+
 print("→ Fetching USD→BRL rate…")
 brl_rate = 5.0  # fallback
 try:
@@ -102,14 +128,6 @@ except Exception as e:
 # ── Aggregate costs ────────────────────────────────────────────────────────────
 daily_cost = defaultdict(float)
 total_cost = 0.0
-def to_float(x):
-    try:    return float(x)
-    except (TypeError, ValueError): return 0.0
-
-def to_int(x):
-    try:    return int(x)
-    except (TypeError, ValueError): return 0
-
 for b in cost_buckets:
     d = ts_to_date(b["start_time"])
     for r in b.get("results", []):
@@ -141,28 +159,40 @@ all_dates    = sorted(set(list(daily_cost) + list(daily_tok)))[-DAYS:]
 short_labels = [datetime.strptime(d, "%Y-%m-%d").strftime("%d/%b") for d in all_dates]
 
 # ── Model cost estimates ───────────────────────────────────────────────────────
+# (input/1M, output/1M, cached-input/1M)
 PRICES = {
-    "o1-pro":        (150.0,  600.0),
-    "o1":            ( 15.0,   60.0),
-    "o1-mini":       (  3.0,   12.0),
-    "o3":            ( 10.0,   40.0),
-    "o3-mini":       (  1.1,    4.4),
-    "o4-mini":       (  1.1,    4.4),
-    "gpt-4.1-nano":  (  0.10,   0.40),
-    "gpt-4.1-mini":  (  0.40,   1.60),
-    "gpt-4.1":       (  2.0,    8.0),
-    "gpt-4o-mini":   (  0.15,   0.60),
-    "gpt-4o":        (  2.5,   10.0),
-    "gpt-4-turbo":   ( 10.0,   30.0),
-    "gpt-4":         ( 30.0,   60.0),
-    "gpt-3.5-turbo": (  0.5,    1.5),
+    "o1-pro":        (150.0,  600.0,  75.0),
+    "o1":            ( 15.0,   60.0,   7.5),
+    "o1-mini":       (  3.0,   12.0,   1.5),
+    "o3":            ( 10.0,   40.0,   2.5),
+    "o3-mini":       (  1.1,    4.4,   0.275),
+    "o4-mini":       (  1.1,    4.4,   0.275),
+    "gpt-4.1-nano":  (  0.10,   0.40,  0.025),
+    "gpt-4.1-mini":  (  0.40,   1.60,  0.10),
+    "gpt-4.1":       (  2.0,    8.0,   0.50),
+    "gpt-4o-mini":   (  0.15,   0.60,  0.075),
+    "gpt-4o":        (  2.5,   10.0,   1.25),
+    "gpt-4-turbo":   ( 10.0,   30.0,   5.0),
+    "gpt-4":         ( 30.0,   60.0,  15.0),
+    "gpt-3.5-turbo": (  0.5,    1.5,   0.25),
 }
+# Match longest prefix first so "gpt-4o-mini" wins over "gpt-4".
+PRICE_PREFIXES = sorted(PRICES.keys(), key=len, reverse=True)
+
+def price_of(model):
+    for pfx in PRICE_PREFIXES:
+        if model.startswith(pfx):
+            return PRICES[pfx]
+    return None
 
 def est_cost(model, inp, out):
-    for pfx, (pi, po) in PRICES.items():
-        if model.startswith(pfx):
-            return inp / 1_000_000 * pi + out / 1_000_000 * po
-    return 0.0
+    p = price_of(model)
+    return (inp / 1_000_000 * p[0] + out / 1_000_000 * p[1]) if p else 0.0
+
+def est_savings(model, cached):
+    # Saved vs. paying full input price for the cached tokens.
+    p = price_of(model)
+    return (cached / 1_000_000 * (p[0] - p[2])) if p else 0.0
 
 model_rows = sorted(
     [
@@ -179,6 +209,8 @@ model_rows = sorted(
     key=lambda x: x["requests"],
     reverse=True,
 )
+
+cache_savings = round(sum(est_savings(m, s["c"]) for m, s in model_agg.items()), 6)
 
 top5       = sorted(model_rows, key=lambda x: x["cost_est"], reverse=True)[:5]
 dnt_labels = [m["name"]     for m in top5]
@@ -206,6 +238,7 @@ DATA = {
     "total_cached":   sum(s["c"] for s in model_agg.values()),
     "total_requests": total_requests,
     "active_models":  len([m for m in model_rows if m["requests"] > 0]),
+    "cache_savings":  cache_savings,
     "daily": {
         "labels": short_labels,
         "cost":   [round(daily_cost.get(d, 0.0), 6) for d in all_dates],
@@ -213,9 +246,10 @@ DATA = {
         "output": [daily_tok.get(d, {}).get("o", 0)  for d in all_dates],
         "cached": [daily_tok.get(d, {}).get("c", 0)  for d in all_dates],
     },
-    "doughnut":   {"labels": dnt_labels, "values": dnt_values},
-    "model_rows": model_rows[:15],
-    "api_keys":   key_rows,
+    "doughnut":     {"labels": dnt_labels, "values": dnt_values},
+    "model_rows":   model_rows[:15],
+    "project_rows": project_rows,
+    "api_keys":     key_rows,
 }
 
 PWD_HASH  = hashlib.sha256(DASHBOARD_PASSWORD.encode()).hexdigest()
@@ -435,6 +469,7 @@ tbody td{padding:10px 12px;color:var(--text)}
       <div class="badge">USD→BRL: <b id="fx-rate">—</b></div>
       <div class="badge">Atualizado: <b id="upd-time">—</b></div>
       <button class="btn" id="theme-btn" onclick="toggleTheme()" title="Alternar tema">🌙</button>
+      <button class="btn" onclick="downloadCSV()" title="Exportar CSV">⬇&nbsp; CSV</button>
       <button class="btn" onclick="location.reload()">↻&nbsp; Atualizar</button>
       <button class="btn btn-out" onclick="doLogout()">Sair</button>
     </div>
@@ -503,6 +538,21 @@ tbody td{padding:10px 12px;color:var(--text)}
           <th>Custo Est.</th>
         </tr></thead>
         <tbody id="model-tbody"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Project table ─────────────────────────────────────────────────────────── -->
+  <div class="tcard">
+    <div class="ttitle">Custo por Projeto (30 dias)</div>
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr>
+          <th>Projeto</th>
+          <th>Custo (USD)</th>
+          <th>Custo (BRL)</th>
+        </tr></thead>
+        <tbody id="proj-tbody"></tbody>
       </table>
     </div>
   </div>
@@ -602,7 +652,12 @@ function updateThemeBtn() {
   if (b) b.textContent = curTheme() === "dark" ? "☀️" : "🌙";
 }
 function initTheme() {
-  const t = localStorage.getItem("kora_theme") || "light";   // light por padrão
+  // Usa a preferência salva; senão, segue o tema do sistema operacional.
+  let t = localStorage.getItem("kora_theme");
+  if (!t) {
+    t = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches
+        ? "dark" : "light";
+  }
   document.documentElement.setAttribute("data-theme", t);
   updateThemeBtn();
 }
@@ -724,8 +779,10 @@ function render() {
   document.getElementById("s-reqs").textContent    = fmt(DATA.total_requests);
   const tot = DATA.total_input + DATA.total_output;
   document.getElementById("s-tokens").textContent  = fmt(tot);
-  document.getElementById("s-tok-detail").textContent =
-    `↑ ${fmt(DATA.total_input)} · ↓ ${fmt(DATA.total_output)} · ♻ ${fmt(DATA.total_cached)}`;
+  const sav = DATA.cache_savings || 0;
+  document.getElementById("s-tok-detail").innerHTML =
+    `↑ ${fmt(DATA.total_input)} · ↓ ${fmt(DATA.total_output)} · ♻ ${fmt(DATA.total_cached)}` +
+    (sav > 0 ? `<br><span style="color:var(--green)">economia c/ cache: ${brl(sav)}</span>` : "");
 
   buildCharts();
 
@@ -746,6 +803,23 @@ function render() {
             <span style="color:var(--muted);font-size:11px"> · ${brl(m.cost_est)}</span></td>
       `;
       mtb.appendChild(tr);
+    });
+  }
+
+  // ── Project table ───────────────────────────────────────────────────────────────
+  const ptb = document.getElementById("proj-tbody");
+  const projs = DATA.project_rows || [];
+  if (!projs.length) {
+    ptb.innerHTML = '<tr><td colspan="3" style="text-align:center;color:var(--muted);padding:24px">Sem dados por projeto no período</td></tr>';
+  } else {
+    projs.forEach(p => {
+      const tr = document.createElement("tr");
+      tr.innerHTML = `
+        <td><span class="tag">${p.name}</span></td>
+        <td style="color:var(--cyan)">${usd(p.cost)}</td>
+        <td class="num">${brl(p.cost)}</td>
+      `;
+      ptb.appendChild(tr);
     });
   }
 
@@ -774,6 +848,40 @@ function render() {
   };
   tick();
   setInterval(tick, 1000);
+}
+
+// ── CSV export ────────────────────────────────────────────────────────────────
+function downloadCSV() {
+  const rate = RATE;
+  const lines = [];
+  lines.push("Kora Monitor — exportado em;" + DATA.updated_at + ";USD-BRL;" + rate);
+  lines.push("");
+  lines.push("USO POR MODELO");
+  lines.push("modelo;requisicoes;tokens_entrada;tokens_saida;cache;custo_usd;custo_brl");
+  (DATA.model_rows || []).forEach(m => {
+    lines.push([m.name, m.requests, m.input, m.output, m.cached,
+      m.cost_est.toFixed(6), (m.cost_est * rate).toFixed(4)].join(";"));
+  });
+  lines.push("");
+  lines.push("CUSTO POR PROJETO");
+  lines.push("projeto;custo_usd;custo_brl");
+  (DATA.project_rows || []).forEach(p => {
+    lines.push([p.name, p.cost.toFixed(6), (p.cost * rate).toFixed(4)].join(";"));
+  });
+  lines.push("");
+  lines.push("CUSTO DIARIO");
+  lines.push("data;custo_usd;custo_brl;entrada;saida;cache");
+  DATA.daily.labels.forEach((d, i) => {
+    const c = DATA.daily.cost[i] || 0;
+    lines.push([d, c.toFixed(6), (c * rate).toFixed(4),
+      DATA.daily.input[i] || 0, DATA.daily.output[i] || 0, DATA.daily.cached[i] || 0].join(";"));
+  });
+  const blob = new Blob(["\\ufeff" + lines.join("\\n")], { type: "text/csv;charset=utf-8" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "kora-monitor.csv";
+  a.click();
+  URL.revokeObjectURL(a.href);
 }
 
 // ── Boot ──────────────────────────────────────────────────────────────────────
