@@ -85,7 +85,7 @@ print("→ Fetching usage…")
 try:
     usage_buckets = api_paginate(
         f"{BASE_URL}/usage/completions",
-        {**base, "group_by": "model"},
+        {**base, "group_by": ["model", "api_key_id"]},
         limit=31,   # max allowed for bucket_width=1d
     )
 except Exception as e:
@@ -138,6 +138,9 @@ for b in cost_buckets:
 # ── Aggregate usage ────────────────────────────────────────────────────────────
 daily_tok      = defaultdict(lambda: {"i": 0, "o": 0, "c": 0, "r": 0})
 model_agg      = defaultdict(lambda: {"i": 0, "o": 0, "c": 0, "r": 0})
+key_agg        = defaultdict(lambda: {"i": 0, "o": 0, "c": 0, "r": 0})
+# Tokens per (api_key, model) so the per-key cost can be estimated with each model's price.
+key_model      = defaultdict(lambda: defaultdict(lambda: {"i": 0, "o": 0}))
 total_requests = 0
 
 for b in usage_buckets:
@@ -148,10 +151,14 @@ for b in usage_buckets:
         c  = to_int(r.get("input_cached_tokens", 0))
         n  = to_int(r.get("num_model_requests", 0))
         mn = norm_model(r.get("model_id", ""))
+        kid = r.get("api_key_id") or "—"
         daily_tok[d]["i"] += i;  daily_tok[d]["o"] += o
         daily_tok[d]["c"] += c;  daily_tok[d]["r"] += n
         model_agg[mn]["i"] += i; model_agg[mn]["o"] += o
         model_agg[mn]["c"] += c; model_agg[mn]["r"] += n
+        key_agg[kid]["i"] += i;  key_agg[kid]["o"] += o
+        key_agg[kid]["c"] += c;  key_agg[kid]["r"] += n
+        key_model[kid][mn]["i"] += i; key_model[kid][mn]["o"] += o
         total_requests += n
 
 # ── Date axis ─────────────────────────────────────────────────────────────────
@@ -219,14 +226,28 @@ if len(model_rows) > 5:
     dnt_labels.append("outros")
     dnt_values.append(round(sum(m["cost_est"] for m in model_rows[5:]), 6))
 
-key_rows = [
-    {
-        "name":      k.get("name", "—"),
-        "created":   fmt_date(k.get("created_at")),
-        "last_used": fmt_date(k.get("last_used_at")) or "Nunca",
-    }
-    for k in api_keys[:20]
-]
+# Estimated cost per API key = sum over each model it used × that model's price.
+key_cost = {
+    kid: round(sum(est_cost(mn, s["i"], s["o"]) for mn, s in models.items()), 6)
+    for kid, models in key_model.items()
+}
+
+key_rows = sorted(
+    [
+        {
+            "name":      k.get("name", "—"),
+            "created":   fmt_date(k.get("created_at")),
+            "last_used": fmt_date(k.get("last_used_at")) or "Nunca",
+            "input":     key_agg.get(k.get("id"), {}).get("i", 0),
+            "output":    key_agg.get(k.get("id"), {}).get("o", 0),
+            "cached":    key_agg.get(k.get("id"), {}).get("c", 0),
+            "requests":  key_agg.get(k.get("id"), {}).get("r", 0),
+            "cost_est":  key_cost.get(k.get("id"), 0.0),
+        }
+        for k in api_keys[:20]
+    ],
+    key=lambda x: x["cost_est"], reverse=True,
+)
 
 # ── DATA object ────────────────────────────────────────────────────────────────
 DATA = {
@@ -564,7 +585,11 @@ tbody td{padding:10px 12px;color:var(--text)}
       <table>
         <thead><tr>
           <th>Nome</th>
-          <th>Criado em</th>
+          <th>Requisições</th>
+          <th>Tokens Entrada</th>
+          <th>Cache</th>
+          <th>Tokens Saída</th>
+          <th>Custo Est.</th>
           <th>Último uso</th>
         </tr></thead>
         <tbody id="keys-tbody"></tbody>
@@ -826,13 +851,18 @@ function render() {
   // ── API Keys table ────────────────────────────────────────────────────────────
   const ktb = document.getElementById("keys-tbody");
   if (!DATA.api_keys.length) {
-    ktb.innerHTML = '<tr><td colspan="3" style="text-align:center;color:var(--muted);padding:24px">Nenhuma chave encontrada</td></tr>';
+    ktb.innerHTML = '<tr><td colspan="7" style="text-align:center;color:var(--muted);padding:24px">Nenhuma chave encontrada</td></tr>';
   } else {
     DATA.api_keys.forEach(k => {
       const tr = document.createElement("tr");
       tr.innerHTML = `
         <td><span class="tag">${k.name}</span></td>
-        <td class="num">${k.created}</td>
+        <td class="num">${fmt(k.requests)}</td>
+        <td class="num">${fmt(k.input)}</td>
+        <td class="num">${fmt(k.cached)}</td>
+        <td class="num">${fmt(k.output)}</td>
+        <td><span style="color:var(--cyan)">${usd(k.cost_est)}</span>
+            <span style="color:var(--muted);font-size:11px"> · ${brl(k.cost_est)}</span></td>
         <td class="num">${k.last_used}</td>
       `;
       ktb.appendChild(tr);
@@ -867,6 +897,13 @@ function downloadCSV() {
   lines.push("projeto;custo_usd;custo_brl");
   (DATA.project_rows || []).forEach(p => {
     lines.push([p.name, p.cost.toFixed(6), (p.cost * rate).toFixed(4)].join(";"));
+  });
+  lines.push("");
+  lines.push("USO POR API KEY");
+  lines.push("chave;requisicoes;tokens_entrada;cache;tokens_saida;custo_usd;custo_brl;ultimo_uso");
+  (DATA.api_keys || []).forEach(k => {
+    lines.push([k.name, k.requests, k.input, k.cached, k.output,
+      k.cost_est.toFixed(6), (k.cost_est * rate).toFixed(4), k.last_used].join(";"));
   });
   lines.push("");
   lines.push("CUSTO DIARIO");
