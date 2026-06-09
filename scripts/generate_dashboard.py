@@ -85,7 +85,7 @@ except Exception as e:
 
 print("→ Fetching API keys…")
 try:
-    api_keys = api_get(f"{BASE_URL}/api_keys", {"limit": 100}).get("data", [])
+    api_keys = api_get(f"{BASE_URL}/admin_api_keys", {"limit": 100}).get("data", [])
 except Exception as e:
     print(f"  Warning (keys skipped): {e}")
     api_keys = []
@@ -93,10 +93,18 @@ except Exception as e:
 # ── Aggregate costs ────────────────────────────────────────────────────────────
 daily_cost = defaultdict(float)
 total_cost = 0.0
+def to_float(x):
+    try:    return float(x)
+    except (TypeError, ValueError): return 0.0
+
+def to_int(x):
+    try:    return int(x)
+    except (TypeError, ValueError): return 0
+
 for b in cost_buckets:
     d = ts_to_date(b["start_time"])
     for r in b.get("results", []):
-        v = r.get("amount", {}).get("value", 0.0)
+        v = to_float(r.get("amount", {}).get("value", 0.0))
         daily_cost[d] += v
         total_cost    += v
 
@@ -108,10 +116,10 @@ total_requests = 0
 for b in usage_buckets:
     d = ts_to_date(b["start_time"])
     for r in b.get("results", []):
-        i  = r.get("input_tokens", 0)
-        o  = r.get("output_tokens", 0)
-        c  = r.get("input_cached_tokens", 0)
-        n  = r.get("num_model_requests", 0)
+        i  = to_int(r.get("input_tokens", 0))
+        o  = to_int(r.get("output_tokens", 0))
+        c  = to_int(r.get("input_cached_tokens", 0))
+        n  = to_int(r.get("num_model_requests", 0))
         mn = norm_model(r.get("model_id", ""))
         daily_tok[d]["i"] += i;  daily_tok[d]["o"] += o
         daily_tok[d]["c"] += c;  daily_tok[d]["r"] += n
