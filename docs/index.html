@@ -3,20 +3,487 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<meta http-equiv="refresh" content="30">
-<title>Kora Monitor — Aguardando dados…</title>
+<title>Kora Monitor</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
 <style>
-  body{margin:0;background:#07070f;color:#d4dcf0;font-family:system-ui,sans-serif;
-    display:flex;align-items:center;justify-content:center;min-height:100vh;flex-direction:column;gap:16px}
-  .hex{font-size:48px;filter:drop-shadow(0 0 14px rgba(0,212,255,.5))}
-  h1{font-size:20px;font-weight:800;color:#00d4ff;letter-spacing:2px}
-  p{font-size:13px;color:#50607a;text-align:center;max-width:320px;line-height:1.6}
+:root{
+  --bg:     #07070f;
+  --card:   #0d0d1b;
+  --card2:  #12122a;
+  --border: #1c1c38;
+  --cyan:   #00d4ff;
+  --purple: #7c4dff;
+  --green:  #00e676;
+  --orange: #ff9100;
+  --red:    #ff4569;
+  --text:   #d4dcf0;
+  --muted:  #50607a;
+  --r:      12px;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:var(--bg);color:var(--text);font-family:system-ui,'Segoe UI',sans-serif;min-height:100vh}
+
+/* ── Login ──────────────────────────────────────────────────────────────────── */
+#login{
+  position:fixed;inset:0;background:rgba(7,7,15,.98);
+  display:flex;align-items:center;justify-content:center;z-index:999;
+}
+.lcard{
+  background:var(--card);border:1px solid var(--border);
+  border-radius:20px;padding:48px 44px;width:360px;
+  box-shadow:0 0 80px rgba(0,212,255,.07),0 0 0 1px rgba(0,212,255,.04);
+  display:flex;flex-direction:column;gap:22px;
+}
+.llogo{text-align:center}
+.llogo .hex{font-size:42px;line-height:1;filter:drop-shadow(0 0 12px rgba(0,212,255,.5))}
+.llogo h1{font-size:20px;font-weight:800;color:var(--cyan);letter-spacing:2px;margin-top:10px}
+.llogo p{font-size:11px;color:var(--muted);margin-top:3px;letter-spacing:.3px}
+.lfld label{display:block;font-size:10px;color:var(--muted);margin-bottom:7px;text-transform:uppercase;letter-spacing:.6px}
+.lfld input{
+  width:100%;padding:13px 16px;background:#0a0a18;
+  border:1px solid var(--border);border-radius:8px;
+  color:var(--text);font-size:15px;outline:none;transition:border-color .2s;
+}
+.lfld input:focus{border-color:var(--cyan);box-shadow:0 0 0 3px rgba(0,212,255,.08)}
+.lbtn{
+  width:100%;padding:14px;
+  background:linear-gradient(135deg,var(--cyan),#0099cc);
+  border:none;border-radius:8px;color:#000;
+  font-size:15px;font-weight:800;cursor:pointer;transition:.15s;
+  letter-spacing:.5px;
+}
+.lbtn:hover{transform:translateY(-1px);box-shadow:0 4px 20px rgba(0,212,255,.3)}
+.lbtn:active{transform:translateY(0)}
+.lerr{color:var(--red);font-size:12px;text-align:center;display:none;padding:4px 0}
+
+/* ── Layout ─────────────────────────────────────────────────────────────────── */
+#dash{display:none;padding:24px;max-width:1440px;margin:0 auto}
+
+/* Header */
+.hdr{display:flex;align-items:center;justify-content:space-between;margin-bottom:28px;flex-wrap:wrap;gap:12px}
+.hdr-l{display:flex;align-items:center;gap:14px}
+.hdr-hex{font-size:30px;filter:drop-shadow(0 0 10px rgba(0,212,255,.4))}
+.hdr-title{font-size:20px;font-weight:800;color:var(--cyan);letter-spacing:1.5px}
+.hdr-sub{font-size:11px;color:var(--muted);margin-top:3px}
+.hdr-r{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.badge{
+  background:var(--card2);border:1px solid var(--border);border-radius:20px;
+  padding:7px 14px;font-size:11px;color:var(--muted);white-space:nowrap;
+}
+.badge b{color:var(--cyan)}
+.btn{
+  background:transparent;border:1px solid var(--border);border-radius:8px;
+  padding:8px 16px;color:var(--text);font-size:12px;cursor:pointer;transition:.15s;
+}
+.btn:hover{border-color:var(--cyan);color:var(--cyan)}
+.btn-out:hover{border-color:var(--red)!important;color:var(--red)!important}
+
+/* Stats */
+.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:20px}
+@media(max-width:900px){.stats{grid-template-columns:repeat(2,1fr)}}
+@media(max-width:500px){.stats{grid-template-columns:1fr}}
+.scard{
+  background:var(--card);border:1px solid var(--border);
+  border-radius:var(--r);padding:22px 20px;position:relative;overflow:hidden;
+}
+.scard::after{
+  content:'';position:absolute;top:0;left:0;right:0;height:2px;
+  background:linear-gradient(90deg,transparent,var(--ac,var(--cyan)),transparent);
+}
+.scard.g{--ac:var(--green)}.scard.o{--ac:var(--orange)}.scard.p{--ac:var(--purple)}
+.scard-glow{
+  position:absolute;top:-20px;right:-20px;width:80px;height:80px;
+  background:radial-gradient(circle,rgba(var(--acr,0,212,255),.08) 0%,transparent 70%);
+  border-radius:50%;
+}
+.scard.g .scard-glow{background:radial-gradient(circle,rgba(0,230,118,.08) 0%,transparent 70%)}
+.scard.o .scard-glow{background:radial-gradient(circle,rgba(255,145,0,.08) 0%,transparent 70%)}
+.scard.p .scard-glow{background:radial-gradient(circle,rgba(124,77,255,.08) 0%,transparent 70%)}
+.sico{font-size:22px;margin-bottom:12px}
+.slbl{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.6px;margin-bottom:6px}
+.sval{font-size:28px;font-weight:800;color:var(--text);line-height:1}
+.sval .cur{font-size:13px;font-weight:400;color:var(--muted)}
+.ssub{font-size:10px;color:var(--muted);margin-top:6px}
+
+/* Charts row */
+.charts-row{display:grid;grid-template-columns:2fr 1fr;gap:16px;margin-bottom:20px}
+@media(max-width:900px){.charts-row{grid-template-columns:1fr}}
+
+.ccard{background:var(--card);border:1px solid var(--border);border-radius:var(--r);padding:22px}
+.ctitle{
+  font-size:12px;font-weight:700;color:var(--text);
+  margin-bottom:16px;display:flex;justify-content:space-between;align-items:center;
+  text-transform:uppercase;letter-spacing:.5px;
+}
+.pill{
+  background:var(--card2);border:1px solid var(--border);border-radius:20px;
+  padding:3px 10px;font-size:10px;color:var(--muted);font-weight:400;
+  text-transform:none;letter-spacing:0;
+}
+.cwrap{position:relative;height:220px}
+.dwrap{position:relative;height:220px}
+.twrap{position:relative;height:200px}
+
+/* Tables */
+.tcard{background:var(--card);border:1px solid var(--border);border-radius:var(--r);padding:22px;margin-bottom:20px}
+.ttitle{font-size:12px;font-weight:700;color:var(--text);margin-bottom:16px;text-transform:uppercase;letter-spacing:.5px}
+.tbl-wrap{overflow-x:auto}
+table{width:100%;border-collapse:collapse;font-size:13px;min-width:500px}
+thead th{
+  color:var(--muted);font-weight:600;font-size:10px;text-transform:uppercase;
+  letter-spacing:.5px;padding:9px 12px;border-bottom:1px solid var(--border);text-align:left;
+}
+tbody tr{border-bottom:1px solid rgba(255,255,255,.025);transition:.12s}
+tbody tr:last-child{border-bottom:none}
+tbody tr:hover{background:var(--card2)}
+tbody td{padding:10px 12px;color:var(--text)}
+.tag{
+  display:inline-block;background:rgba(0,212,255,.08);
+  border:1px solid rgba(0,212,255,.18);color:var(--cyan);
+  border-radius:4px;padding:2px 9px;font-size:11px;font-family:monospace;
+}
+.num{font-variant-numeric:tabular-nums;color:var(--muted)}
+
+/* Footer */
+.foot{text-align:center;color:var(--muted);font-size:11px;padding:16px 0 40px}
+.foot .nxt{color:var(--cyan);font-variant-numeric:tabular-nums}
+
+/* Scrollbar */
+::-webkit-scrollbar{width:5px;height:5px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
 </style>
 </head>
 <body>
-  <div class="hex">⬡</div>
-  <h1>KORA MONITOR</h1>
-  <p>O dashboard será gerado automaticamente pelo GitHub Actions na primeira execução.<br>
-  Esta página atualiza a cada 30 segundos.</p>
+
+<!-- Login ─────────────────────────────────────────────────────────────────── -->
+<div id="login">
+  <div class="lcard">
+    <div class="llogo">
+      <div class="hex">⬡</div>
+      <h1>KORA MONITOR</h1>
+      <p>OpenAI Usage Dashboard</p>
+    </div>
+    <div class="lfld">
+      <label>Senha de acesso</label>
+      <input type="password" id="pwd" placeholder="••••••••" autocomplete="current-password">
+    </div>
+    <button class="lbtn" id="lbtn" onclick="doLogin()">Entrar</button>
+    <div class="lerr" id="lerr">Senha incorreta. Tente novamente.</div>
+  </div>
+</div>
+
+<!-- Dashboard ───────────────────────────────────────────────────────────────── -->
+<div id="dash">
+
+  <div class="hdr">
+    <div class="hdr-l">
+      <div class="hdr-hex">⬡</div>
+      <div>
+        <div class="hdr-title">KORA MONITOR</div>
+        <div class="hdr-sub">OpenAI Usage Dashboard &nbsp;·&nbsp; últimos 30 dias</div>
+      </div>
+    </div>
+    <div class="hdr-r">
+      <div class="badge">Atualizado: <b id="upd-time">—</b></div>
+      <button class="btn" onclick="location.reload()">↻&nbsp; Atualizar</button>
+      <button class="btn btn-out" onclick="doLogout()">Sair</button>
+    </div>
+  </div>
+
+  <!-- Stats ──────────────────────────────────────────────────────────────────── -->
+  <div class="stats">
+    <div class="scard">
+      <div class="scard-glow"></div>
+      <div class="sico">💰</div>
+      <div class="slbl">Custo Real (30d)</div>
+      <div class="sval"><span class="cur">$ </span><span id="s-cost">—</span></div>
+      <div class="ssub">via fatura OpenAI</div>
+    </div>
+    <div class="scard g">
+      <div class="scard-glow"></div>
+      <div class="sico">🔢</div>
+      <div class="slbl">Total de Tokens (30d)</div>
+      <div class="sval"><span id="s-tokens">—</span></div>
+      <div class="ssub" id="s-tok-detail">—</div>
+    </div>
+    <div class="scard o">
+      <div class="scard-glow"></div>
+      <div class="sico">🤖</div>
+      <div class="slbl">Modelos Ativos</div>
+      <div class="sval"><span id="s-models">—</span></div>
+      <div class="ssub">em uso no período</div>
+    </div>
+    <div class="scard p">
+      <div class="scard-glow"></div>
+      <div class="sico">📡</div>
+      <div class="slbl">Requisições (30d)</div>
+      <div class="sval"><span id="s-reqs">—</span></div>
+      <div class="ssub">chamadas à API</div>
+    </div>
+  </div>
+
+  <!-- Charts ─────────────────────────────────────────────────────────────────── -->
+  <div class="charts-row">
+    <div class="ccard">
+      <div class="ctitle">Custo Diário <span class="pill">USD · 30 dias</span></div>
+      <div class="cwrap"><canvas id="c-cost"></canvas></div>
+    </div>
+    <div class="ccard">
+      <div class="ctitle">Custo por Modelo <span class="pill">estimado</span></div>
+      <div class="dwrap"><canvas id="c-doughnut"></canvas></div>
+    </div>
+  </div>
+
+  <div class="ccard" style="margin-bottom:20px">
+    <div class="ctitle">Tokens por Dia <span class="pill">entrada · saída · cache</span></div>
+    <div class="twrap"><canvas id="c-tokens"></canvas></div>
+  </div>
+
+  <!-- Model table ───────────────────────────────────────────────────────────── -->
+  <div class="tcard">
+    <div class="ttitle">Uso por Modelo (30 dias)</div>
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr>
+          <th>Modelo</th>
+          <th>Requisições</th>
+          <th>Tokens Entrada</th>
+          <th>Tokens Saída</th>
+          <th>Cache</th>
+          <th>Custo Est.</th>
+        </tr></thead>
+        <tbody id="model-tbody"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- API Keys ──────────────────────────────────────────────────────────────── -->
+  <div class="tcard">
+    <div class="ttitle">API Keys</div>
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr>
+          <th>Nome</th>
+          <th>Criado em</th>
+          <th>Último uso</th>
+        </tr></thead>
+        <tbody id="keys-tbody"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="foot">
+    Próxima atualização em &nbsp;<span id="nxt" class="nxt">—</span>
+    &nbsp;·&nbsp; Dados via OpenAI Admin API &nbsp;·&nbsp; Kora Monitor
+  </div>
+
+</div><!-- /#dash -->
+
+<script>
+// ── Embedded data ─────────────────────────────────────────────────────────────
+const DATA = {"updated_at": "09/06/2026 01:28 UTC", "month_cost": 6.278662, "total_input": 6930740, "total_output": 263489, "total_cached": 4385664, "total_requests": 1827, "active_models": 1, "daily": {"labels": ["11/May", "13/May", "15/May", "16/May", "17/May", "18/May", "19/May", "20/May", "21/May", "22/May", "23/May", "25/May", "26/May", "27/May", "28/May", "29/May", "02/Jun", "03/Jun", "06/Jun", "07/Jun", "08/Jun", "09/Jun"], "cost": [0.134047, 0.034983, 0.098734, 0.801366, 0.803115, 0.6013, 0.421668, 0.247167, 0.115994, 0.059725, 0.000902, 0.184364, 0.313853, 0.319701, 0.798193, 0.096671, 0.482699, 0.57373, 0.005954, 0.030983, 0.153513, 0.0], "input": [189183, 44735, 153123, 866515, 900993, 591541, 325899, 258271, 112861, 61097, 330, 273925, 336300, 262740, 854908, 132178, 580500, 762720, 2699, 29785, 178628, 11809], "output": [13427, 1564, 5709, 18651, 34993, 25917, 20999, 12492, 3799, 2785, 49, 7495, 12431, 12606, 38951, 3196, 16733, 23089, 258, 1897, 5306, 1142], "cached": [168064, 32512, 133120, 416256, 598272, 353152, 173952, 178304, 56064, 39552, 0, 207104, 205184, 119808, 586624, 89344, 364672, 542720, 0, 8448, 109184, 3328]}, "doughnut": {"labels": ["unknown"], "values": [0.0]}, "model_rows": [{"name": "unknown", "input": 6930740, "output": 263489, "cached": 4385664, "requests": 1827, "cost_est": 0.0}], "api_keys": [{"name": "Objectdata", "created": "07/06/2026", "last_used": "09/06/2026"}, {"name": "Iotec", "created": "09/06/2026", "last_used": "09/06/2026"}, {"name": "Mamute", "created": "09/06/2026", "last_used": "09/06/2026"}, {"name": "CentralCabos", "created": "09/06/2026", "last_used": "09/06/2026"}, {"name": "GlobalTime", "created": "09/06/2026", "last_used": "09/06/2026"}, {"name": "Kora Testes", "created": "09/06/2026", "last_used": "09/06/2026"}, {"name": "Wolf", "created": "09/06/2026", "last_used": "09/06/2026"}]};
+const PWD  = "062a0bd22bd1a9cf2857e6adb60e7f749d4372cd390841affcdc9694ac075bb6";
+
+// ── Auth ──────────────────────────────────────────────────────────────────────
+const SK  = "kora_session";
+const TTL = 7 * 86400000;
+
+async function sha256(str) {
+  const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(str));
+  return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2,"0")).join("");
+}
+
+function sessionOk() {
+  try {
+    const s = JSON.parse(localStorage.getItem(SK));
+    return s && s.h === PWD && Date.now() < s.e;
+  } catch { return false; }
+}
+
+async function doLogin() {
+  const btn = document.getElementById("lbtn");
+  btn.textContent = "Verificando…";
+  btn.disabled = true;
+  const h = await sha256(document.getElementById("pwd").value);
+  if (h === PWD) {
+    localStorage.setItem(SK, JSON.stringify({ h, e: Date.now() + TTL }));
+    showDash();
+  } else {
+    document.getElementById("lerr").style.display = "block";
+    btn.textContent = "Entrar";
+    btn.disabled = false;
+  }
+}
+
+function doLogout() {
+  localStorage.removeItem(SK);
+  location.reload();
+}
+
+document.getElementById("pwd").addEventListener("keydown", e => {
+  if (e.key === "Enter") doLogin();
+});
+
+// ── Formatting ────────────────────────────────────────────────────────────────
+function fmt(n, dec = 0) {
+  if (n == null) return "—";
+  if (n >= 1e9) return (n / 1e9).toFixed(1) + "B";
+  if (n >= 1e6) return (n / 1e6).toFixed(1) + "M";
+  if (n >= 1e3) return (n / 1e3).toFixed(1) + "K";
+  return n.toLocaleString("pt-BR", { maximumFractionDigits: dec });
+}
+
+// ── Render ────────────────────────────────────────────────────────────────────
+function showDash() {
+  document.getElementById("login").style.display = "none";
+  document.getElementById("dash").style.display  = "block";
+  render();
+}
+
+function render() {
+  // Stats
+  document.getElementById("upd-time").textContent  = DATA.updated_at;
+  document.getElementById("s-cost").textContent    = DATA.month_cost.toFixed(4);
+  document.getElementById("s-models").textContent  = DATA.active_models;
+  document.getElementById("s-reqs").textContent    = fmt(DATA.total_requests);
+  const tot = DATA.total_input + DATA.total_output;
+  document.getElementById("s-tokens").textContent  = fmt(tot);
+  document.getElementById("s-tok-detail").textContent =
+    `↑ ${fmt(DATA.total_input)} · ↓ ${fmt(DATA.total_output)} · ♻ ${fmt(DATA.total_cached)}`;
+
+  // Chart defaults
+  Chart.defaults.color       = "#50607a";
+  Chart.defaults.borderColor = "#1c1c38";
+  const font = { family: "system-ui,'Segoe UI',sans-serif", size: 11 };
+  const grid = { color: "rgba(28,28,56,.8)" };
+
+  // ── Daily cost bar ────────────────────────────────────────────────────────────
+  new Chart(document.getElementById("c-cost"), {
+    type: "bar",
+    data: {
+      labels: DATA.daily.labels,
+      datasets: [{
+        label: "USD",
+        data: DATA.daily.cost,
+        backgroundColor: "rgba(0,212,255,.45)",
+        borderColor:     "rgba(0,212,255,.9)",
+        borderWidth: 1,
+        borderRadius: 3,
+        hoverBackgroundColor: "rgba(0,212,255,.7)",
+      }],
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: { callbacks: { label: ctx => " $" + ctx.raw.toFixed(4) } },
+      },
+      scales: {
+        x: { ticks: { font, maxRotation: 0, autoSkip: true, maxTicksLimit: 12 }, grid },
+        y: { ticks: { font, callback: v => "$" + v.toFixed(3) }, grid },
+      },
+    },
+  });
+
+  // ── Doughnut ──────────────────────────────────────────────────────────────────
+  const palette = ["#00d4ff","#7c4dff","#00e676","#ff9100","#ff4569","#40c4ff","#e040fb","#69f0ae"];
+  new Chart(document.getElementById("c-doughnut"), {
+    type: "doughnut",
+    data: {
+      labels: DATA.doughnut.labels,
+      datasets: [{
+        data: DATA.doughnut.values,
+        backgroundColor: palette,
+        borderWidth: 0,
+        hoverOffset: 8,
+      }],
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      cutout: "68%",
+      plugins: {
+        legend: {
+          position: "bottom",
+          labels: { font, padding: 10, boxWidth: 10, usePointStyle: true, pointStyle: "circle" },
+        },
+        tooltip: { callbacks: { label: ctx => " $" + ctx.raw.toFixed(4) } },
+      },
+    },
+  });
+
+  // ── Token stacked bar ─────────────────────────────────────────────────────────
+  new Chart(document.getElementById("c-tokens"), {
+    type: "bar",
+    data: {
+      labels: DATA.daily.labels,
+      datasets: [
+        { label: "Entrada", data: DATA.daily.input,  backgroundColor: "rgba(0,212,255,.65)",  borderRadius: 2 },
+        { label: "Saída",   data: DATA.daily.output, backgroundColor: "rgba(124,77,255,.65)", borderRadius: 2 },
+        { label: "Cache",   data: DATA.daily.cached, backgroundColor: "rgba(0,230,118,.55)",  borderRadius: 2 },
+      ],
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: {
+        legend: { labels: { font, boxWidth: 10, usePointStyle: true, pointStyle: "circle", padding: 16 } },
+        tooltip: { callbacks: { label: ctx => " " + fmt(ctx.raw) + " tokens" } },
+      },
+      scales: {
+        x: { stacked: true, ticks: { font, maxRotation: 0, autoSkip: true, maxTicksLimit: 12 }, grid },
+        y: { stacked: true, ticks: { font, callback: v => fmt(v) }, grid },
+      },
+    },
+  });
+
+  // ── Model table ───────────────────────────────────────────────────────────────
+  const mtb = document.getElementById("model-tbody");
+  if (!DATA.model_rows.length) {
+    mtb.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--muted);padding:24px">Sem dados de uso no período</td></tr>';
+  } else {
+    DATA.model_rows.forEach(m => {
+      const tr = document.createElement("tr");
+      tr.innerHTML = `
+        <td><span class="tag">${m.name}</span></td>
+        <td class="num">${fmt(m.requests)}</td>
+        <td class="num">${fmt(m.input)}</td>
+        <td class="num">${fmt(m.output)}</td>
+        <td class="num">${fmt(m.cached)}</td>
+        <td style="color:var(--cyan)">$${m.cost_est.toFixed(4)}</td>
+      `;
+      mtb.appendChild(tr);
+    });
+  }
+
+  // ── API Keys table ────────────────────────────────────────────────────────────
+  const ktb = document.getElementById("keys-tbody");
+  if (!DATA.api_keys.length) {
+    ktb.innerHTML = '<tr><td colspan="3" style="text-align:center;color:var(--muted);padding:24px">Nenhuma chave encontrada</td></tr>';
+  } else {
+    DATA.api_keys.forEach(k => {
+      const tr = document.createElement("tr");
+      tr.innerHTML = `
+        <td><span class="tag">${k.name}</span></td>
+        <td class="num">${k.created}</td>
+        <td class="num">${k.last_used}</td>
+      `;
+      ktb.appendChild(tr);
+    });
+  }
+
+  // ── Countdown (next refresh in 5.5 min) ────────────────────────────────────
+  let secs = 330;
+  const tick = () => {
+    const m = Math.floor(secs / 60), s = String(secs % 60).padStart(2, "0");
+    document.getElementById("nxt").textContent = `${m}:${s}`;
+    if (--secs < 0) location.reload();
+  };
+  tick();
+  setInterval(tick, 1000);
+}
+
+// ── Boot ──────────────────────────────────────────────────────────────────────
+if (sessionOk()) showDash();
+</script>
 </body>
 </html>
